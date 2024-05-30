@@ -56,7 +56,7 @@ class Tracklet:
 def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
     return math.sqrt(math.pow((b.center[0] - a.center[0]), 2) + math.pow((b.center[1] - a.center[1]), 2))
 
-class Tracker:
+class TrackerManager:
     def __init__(self, frame, bboxes):
         self.trackers = self.initialize_trackers(frame, bboxes)
 
@@ -178,55 +178,79 @@ class VideoProcessor:
         os.makedirs(self.out_dir_with_video_name, exist_ok=True)
 
     def process_video(self):
+        self.extract_and_prepare_images()
+        self.set_end_frame_if_none()
+        self.initialize_processing_tools()
+
+        for frame_id in tqdm(range(self.start_frame, self.end_frame + 1)):
+            frame = self.load_and_prepare_frame(frame_id)
+            if frame is None:
+                continue
+
+            if not self.initialized:
+                self.initialize_trackers(frame)
+            
+            tracklets, success_results = self.update_trackers(frame)
+            self.process_frame(frame, frame_id, tracklets)
+            if self.check_user_interrupt():
+                break
+
+        self.finalize_processing()
+
+    def extract_and_prepare_images(self):
         VideoUtils.extract_images_if_not_existing_already(self.video_path, self.images_dir)
+
+    def set_end_frame_if_none(self):
         if self.end_frame is None:
             self.end_frame = VideoUtils.get_image_count(self.images_dir)
             logger.info(f"End frame not specified. Setting to {self.end_frame}")
 
-        visualizer = Visualizer(self.output_video_path, FPS, (1280, 720))
-        roi_manager = ROIManager(self.cache_path)
+    def initialize_processing_tools(self):
+        self.visualizer = Visualizer(self.output_video_path, FPS, (1280, 720))
+        self.roi_manager = ROIManager(self.cache_path)
+        os.makedirs(self.out_dir_with_video_name, exist_ok=True)
 
-        for frame_id in tqdm(range(self.start_frame, self.end_frame + 1)):
-            frame_file = os.path.join(self.images_dir, f"{frame_id:05d}.jpg")
-            logger.trace(f"Processing frame {frame_id} from {frame_file}")
+    def load_and_prepare_frame(self, frame_id):
+        frame_file = os.path.join(self.images_dir, f"{frame_id:05d}.jpg")
+        logger.trace(f"Processing frame {frame_id} from {frame_file}")
 
-            if not os.path.exists(frame_file):
-                logger.error(f"Frame {frame_file} not found. Skipping frame.")
-                continue
-            
-            frame = cv2.imread(frame_file)
-            frame = cv2.resize(frame, (1280, 720))
+        if not os.path.exists(frame_file):
+            logger.error(f"Frame {frame_file} not found. Skipping frame.")
+            return None
 
-            if not self.initialized:
-                bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = roi_manager.try_to_load_roi_cache_otherwise_set_manually(frame)
-                self.tracker = Tracker(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
-                self.initialized = True
-                cv2.destroyAllWindows()
-                cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
+        frame = cv2.imread(frame_file)
+        return cv2.resize(frame, (1280, 720))
 
-            tracklets, success_results = self.tracker.update_trackers(frame)
-            
-            front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[1], tracklets[3])
-            visualizer.annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
-            self.front_distances.append(front_distance)
-            self.front_distances_frame_ids.append(frame_id)
+    def initialize_trackers(self, frame):
+        bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = self.roi_manager.try_to_load_roi_cache_otherwise_set_manually(frame)
+        self.tracker = TrackerManager(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
+        self.initialized = True
+        cv2.destroyAllWindows()
+        cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
 
-            back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[0], tracklets[2])
-            visualizer.annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
-            self.back_distances.append(back_distance)
-            self.back_distances_frame_ids.append(frame_id)
+    def update_trackers(self, frame):
+        return self.tracker.update_trackers(frame)
 
-            cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+    def process_frame(self, frame, frame_id, tracklets):
+        front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[1], tracklets[3])
+        self.visualizer.annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
+        self.front_distances.append(front_distance)
+        self.front_distances_frame_ids.append(frame_id)
 
-            visualizer.write_frame(frame)
-            cv2.imshow("Preview", frame)
-            
-            # break if q or ESC pressed
-            if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:
-                logger.warning("User interrupted processing. Exiting.")
-                break
+        back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[0], tracklets[2])
+        self.visualizer.annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
+        self.back_distances.append(back_distance)
+        self.back_distances_frame_ids.append(frame_id)
 
-        visualizer.release()
+        cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        self.visualizer.write_frame(frame)
+        cv2.imshow("Preview", frame)
+
+    def check_user_interrupt(self):
+        return cv2.waitKey(1) & 0xFF in [ord('q'), 27]
+
+    def finalize_processing(self):
+        self.visualizer.release()
         ResultSaver.save_results(self.result_filepath, self.front_distances_frame_ids, self.front_distances, self.back_distances)
         Visualizer.plot_results(self.front_distances_frame_ids, self.front_distances, self.back_distances, self.output_plot_path)
 
