@@ -2,10 +2,11 @@
 
 Analyze suspension of a (moto)bikes.
 
+## Demo Results
+
 ![Example Output](./docs/example_output/out.gif)
 
 ![Result Plot](./docs/example_output/plot.png)
-
 
 ## Setup
 

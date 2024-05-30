@@ -10,6 +10,8 @@ output
 *.zip
 .env
 .cache
+!docs/example_output/out.mp4
+!docs/example_output/plot.png
 
 
 
