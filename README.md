@@ -1,6 +1,6 @@
-# motobike-analyzer
+# bike-suspension-analyzer
 
-Analyze suspension of a (trial) motobike.
+Analyze suspension of a (moto)bikes.
 
 ![Example Output](./docs/example_output/out.gif)
 
