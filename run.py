@@ -6,10 +6,10 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from loguru import logger
+from tqdm import tqdm
 
 # Constants
-CACHE_FILENAME = "roi_cache.json"
-OUTPUT_DIR = "./output"
+CACHE_FILENAME = "_roi_cache.json"
 RESULT_FILENAME = "results.json"
 OUTPUT_VIDEO_FILENAME = "out.mp4"
 OUTPUT_PLOT_FILENAME = "plot.png"
@@ -18,17 +18,15 @@ FPS = 30
 # Argument Parser
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Analyze motobike suspension')
-    parser.add_argument('video_images_path', type=str, help='Path to video images after extraction')
+    parser.add_argument('video_path', type=str, help='Path to the video file')
+    parser.add_argument('--output_dir', type=str, default="./output/", help='Output directory to save results')
+    parser.add_argument('--cache_dir', type=str, default="./.cache/", help='Cache directory to save images')
     parser.add_argument('--start', type=int, default=1, help='Start frame number (has to start with 1) (default: 1)')
     parser.add_argument('--end', type=int, default=None, help='End frame number (default: None)')
     args = parser.parse_args()
 
     assert args.start > 0, "Start frame has to be greater than 0 due to ffmpeg generated frames starting with 00001"
-    
-    if args.end is None:
-        args.end = get_image_count(args.video_images_path)
-        logger.info(f"End frame not specified. Setting to {args.end}")
-    
+
     return args
 
 # Utility Functions
@@ -38,11 +36,23 @@ def get_image_count(path):
 def get_cache_path(video_images_path):
     return os.path.join(video_images_path, CACHE_FILENAME)
 
+def extract_images_if_not_existing_already(video_path, images_dir):
+    
+    if os.path.exists(images_dir):
+        logger.warning(f"Images directory {images_dir} already exists. Skipping extraction.")
+        return
+    
+    os.makedirs(images_dir, exist_ok=True)
+    cmd = f"ffmpeg -i {video_path} {images_dir}/%05d.jpg"
+    logger.info(f"Executing command: {cmd}")
+    os.system(cmd)
+
 # Cache Functions
 def cached_roi_location_available(cache_path) -> bool:
     return os.path.exists(cache_path)
 
 def load_cached_roi_location(cache_path):
+    logger.warning(f"Loading cached tracklet locations from {cache_path}")
     with open(cache_path, "r") as f:
         bboxes = json.load(f)
     return bboxes["bbox_top_left"], bboxes["bbox_top_right"], bboxes["bbox_bottom_left"], bboxes["bbox_bottom_right"]
@@ -80,13 +90,24 @@ def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
 
 # Main Processing Function
 def process_video(args):
+    video_name = os.path.splitext(os.path.basename(args.video_path))[0]
+    images_dir = os.path.join(args.cache_dir, video_name)
+    extract_images_if_not_existing_already(args.video_path, images_dir)
+
     frame_id = args.start
     end_frame = args.end
-    cache_path = get_cache_path(args.video_images_path)
+    cache_path = get_cache_path(images_dir)
 
-    result_filepath = os.path.join(OUTPUT_DIR, RESULT_FILENAME)
-    output_video_path = os.path.join(OUTPUT_DIR, OUTPUT_VIDEO_FILENAME)
-    output_plot_path = os.path.join(OUTPUT_DIR, OUTPUT_PLOT_FILENAME)
+    if end_frame is None:
+        end_frame = get_image_count(images_dir)
+        logger.info(f"End frame not specified. Setting to {end_frame}")
+
+    out_dir_with_video_name = os.path.join(args.output_dir, video_name)
+    os.makedirs(out_dir_with_video_name, exist_ok=True)
+    
+    result_filepath = os.path.join(out_dir_with_video_name, RESULT_FILENAME)
+    output_video_path = os.path.join(out_dir_with_video_name, OUTPUT_VIDEO_FILENAME)
+    output_plot_path = os.path.join(out_dir_with_video_name, OUTPUT_PLOT_FILENAME)
 
     front_distances = []
     front_distances_frame_ids = []
@@ -95,15 +116,12 @@ def process_video(args):
 
     initialized = False
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(output_video_path, fourcc, FPS, (1280, 720))
 
-    for frame_id in range(args.start, end_frame + 1):
-        
-        frame_file = os.path.join(args.video_images_path, f"{frame_id:05d}.jpg")
-        logger.debug(f"Processing frame {frame_id} from {frame_file}")
+    for frame_id in tqdm(range(args.start, end_frame + 1)):
+        frame_file = os.path.join(images_dir, f"{frame_id:05d}.jpg")
+        logger.trace(f"Processing frame {frame_id} from {frame_file}")
 
         if not os.path.exists(frame_file):
             logger.error(f"Frame {frame_file} not found. Skipping frame.")
@@ -136,9 +154,11 @@ def process_video(args):
 
         writer.write(frame)
         cv2.imshow("Preview", frame)
-        cv2.waitKey(1)
         
-        frame_id += 1
+        # break if q or ESC pressed
+        if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:
+            logger.warning("User interrupted processing. Exiting.")
+            break
 
     writer.release()
     save_results(result_filepath, front_distances_frame_ids, front_distances, back_distances)
