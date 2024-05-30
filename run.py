@@ -31,7 +31,7 @@ def parse_arguments():
 
 class VideoUtils:
     @staticmethod
-    def extract_images_if_not_existing_already(video_path, images_dir):
+    def extract_images_if_not_existing(video_path, images_dir):
         if os.path.exists(images_dir):
             logger.warning(f"Images directory {images_dir} already exists. Skipping extraction.")
             return
@@ -50,11 +50,11 @@ class VideoUtils:
 
 class Tracklet:
     def __init__(self, bbox):
-        x, y, w, h = [int(i) for i in bbox]
+        x, y, w, h = map(int, bbox)
         self.center = (int(x + w / 2), int(y + h / 2))
 
 def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
-    return math.sqrt(math.pow((b.center[0] - a.center[0]), 2) + math.pow((b.center[1] - a.center[1]), 2))
+    return math.sqrt((b.center[0] - a.center[0]) ** 2 + (b.center[1] - a.center[1]) ** 2)
 
 class TrackerManager:
     def __init__(self, frame, bboxes):
@@ -74,9 +74,6 @@ class TrackerManager:
         success_results = []
         for tracker in self.trackers:
             success, bbox = tracker.update(frame)
-            if success:
-                x, y, w, h = [int(i) for i in bbox]
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             tracklets.append(Tracklet(bbox))
             success_results.append(success)
         return tracklets, success_results
@@ -129,7 +126,12 @@ class ROIManager:
         bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
         bbox_bottom_right = cv2.selectROI('bbox_bottom_right', frame, True)
 
-        bboxes = {"bbox_top_left": bbox_top_left, "bbox_top_right": bbox_top_right, "bbox_bottom_left": bbox_bottom_left, "bbox_bottom_right": bbox_bottom_right}
+        bboxes = {
+            "bbox_top_left": bbox_top_left, 
+            "bbox_top_right": bbox_top_right, 
+            "bbox_bottom_left": bbox_bottom_left, 
+            "bbox_bottom_right": bbox_bottom_right
+        }
 
         cache_parent_dir = os.path.dirname(self.cache_path)
         os.makedirs(cache_parent_dir, exist_ok=True)
@@ -139,7 +141,7 @@ class ROIManager:
 
         return bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right
 
-    def try_to_load_roi_cache_otherwise_set_manually(self, frame):
+    def try_to_load_roi_cache_or_set_manually(self, frame):
         if self.cached_roi_location_available():
             return self.load_cached_roi_location()
         else:
@@ -198,7 +200,7 @@ class VideoProcessor:
         self.finalize_processing()
 
     def extract_and_prepare_images(self):
-        VideoUtils.extract_images_if_not_existing_already(self.video_path, self.images_dir)
+        VideoUtils.extract_images_if_not_existing(self.video_path, self.images_dir)
 
     def set_end_frame_if_none(self):
         if self.end_frame is None:
@@ -222,7 +224,7 @@ class VideoProcessor:
         return cv2.resize(frame, (1280, 720))
 
     def initialize_trackers(self, frame):
-        bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = self.roi_manager.try_to_load_roi_cache_otherwise_set_manually(frame)
+        bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = self.roi_manager.try_to_load_roi_cache_or_set_manually(frame)
         self.tracker = TrackerManager(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
         self.initialized = True
         cv2.destroyAllWindows()
