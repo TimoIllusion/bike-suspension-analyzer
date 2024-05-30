@@ -8,14 +8,13 @@ import matplotlib.pyplot as plt
 from loguru import logger
 from tqdm import tqdm
 
-# Constants
-CACHE_FILENAME = "_roi_cache.json"
-RESULT_FILENAME = "results.json"
-OUTPUT_VIDEO_FILENAME = "out.mp4"
-OUTPUT_PLOT_FILENAME = "plot.png"
-FPS = 30
+class Constants:
+    CACHE_FILENAME = "_roi_cache.json"
+    RESULT_FILENAME = "results.json"
+    OUTPUT_VIDEO_FILENAME = "out.mp4"
+    OUTPUT_PLOT_FILENAME = "plot.png"
+    FPS = 30
 
-# Argument Parser
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Analyze motorcycle suspension')
     parser.add_argument('video_path', type=str, help='Path to the video file')
@@ -28,6 +27,24 @@ def parse_arguments():
     assert args.start > 0, "Start frame has to be greater than 0 due to ffmpeg generated frames starting with 00001"
 
     return args
+
+class FilePathManager:
+    def __init__(self, video_path, output_dir, cache_dir):
+        self.video_path = video_path
+        self.output_dir = output_dir
+        self.cache_dir = cache_dir
+        self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+        self.images_dir = os.path.join(self.cache_dir, self.video_name)
+        self.out_dir_with_video_name = os.path.join(self.output_dir, self.video_name)
+        self.cache_path = self.get_cache_path(self.images_dir)
+        self.result_filepath = os.path.join(self.out_dir_with_video_name, Constants.RESULT_FILENAME)
+        self.output_video_path = os.path.join(self.out_dir_with_video_name, Constants.OUTPUT_VIDEO_FILENAME)
+        self.output_plot_path = os.path.join(self.out_dir_with_video_name, Constants.OUTPUT_PLOT_FILENAME)
+        os.makedirs(self.out_dir_with_video_name, exist_ok=True)
+
+    @staticmethod
+    def get_cache_path(images_dir):
+        return os.path.join(images_dir, Constants.CACHE_FILENAME)
 
 class VideoUtils:
     @staticmethod
@@ -42,16 +59,16 @@ class VideoUtils:
 
     @staticmethod
     def get_image_count(images_dir):
-        return len([f for f in os.listdir(images_dir) if f.endswith('.jpg') and f != CACHE_FILENAME])
-
-    @staticmethod
-    def get_cache_path(images_dir):
-        return os.path.join(images_dir, CACHE_FILENAME)
+        return len([f for f in os.listdir(images_dir) if f.endswith('.jpg') and f != Constants.CACHE_FILENAME])
 
 class Tracklet:
     def __init__(self, bbox):
         x, y, w, h = map(int, bbox)
         self.center = (int(x + w / 2), int(y + h / 2))
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
 
 def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
     return math.sqrt((b.center[0] - a.center[0]) ** 2 + (b.center[1] - a.center[1]) ** 2)
@@ -86,6 +103,9 @@ class Visualizer:
     def annotate_frame(self, frame, marker_upper, marker_lower, distance, color):
         cv2.putText(frame, str(np.round(distance, 1)), (marker_upper.center[0] + 50, marker_upper.center[1] + 50), 0, 1.2, (0, 0, 0), 3)
         cv2.line(frame, marker_upper.center, marker_lower.center, color, 6)
+
+    def draw_marker_as_rectangle(self, frame, marker, color):
+        cv2.rectangle(frame, (marker.x, marker.y), (marker.x + marker.w, marker.y + marker.h), color, 2)
 
     def write_frame(self, frame):
         self.writer.write(frame)
@@ -160,24 +180,14 @@ class ResultSaver:
 
 class VideoProcessor:
     def __init__(self, args):
-        self.video_path = args.video_path
-        self.output_dir = args.output_dir
-        self.cache_dir = args.cache_dir
+        self.file_manager = FilePathManager(args.video_path, args.output_dir, args.cache_dir)
         self.start_frame = args.start
         self.end_frame = args.end
-        self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-        self.images_dir = os.path.join(self.cache_dir, self.video_name)
-        self.cache_path = VideoUtils.get_cache_path(self.images_dir)
-        self.out_dir_with_video_name = os.path.join(self.output_dir, self.video_name)
-        self.result_filepath = os.path.join(self.out_dir_with_video_name, RESULT_FILENAME)
-        self.output_video_path = os.path.join(self.out_dir_with_video_name, OUTPUT_VIDEO_FILENAME)
-        self.output_plot_path = os.path.join(self.out_dir_with_video_name, OUTPUT_PLOT_FILENAME)
         self.front_distances = []
         self.front_distances_frame_ids = []
         self.back_distances = []
         self.back_distances_frame_ids = []
         self.initialized = False
-        os.makedirs(self.out_dir_with_video_name, exist_ok=True)
 
     def process_video(self):
         self.extract_and_prepare_images()
@@ -200,20 +210,20 @@ class VideoProcessor:
         self.finalize_processing()
 
     def extract_and_prepare_images(self):
-        VideoUtils.extract_images_if_not_existing(self.video_path, self.images_dir)
+        VideoUtils.extract_images_if_not_existing(self.file_manager.video_path, self.file_manager.images_dir)
 
     def set_end_frame_if_none(self):
         if self.end_frame is None:
-            self.end_frame = VideoUtils.get_image_count(self.images_dir)
+            self.end_frame = VideoUtils.get_image_count(self.file_manager.images_dir)
             logger.info(f"End frame not specified. Setting to {self.end_frame}")
 
     def initialize_processing_tools(self):
-        self.visualizer = Visualizer(self.output_video_path, FPS, (1280, 720))
-        self.roi_manager = ROIManager(self.cache_path)
-        os.makedirs(self.out_dir_with_video_name, exist_ok=True)
+        self.visualizer = Visualizer(self.file_manager.output_video_path, Constants.FPS, (1280, 720))
+        self.roi_manager = ROIManager(self.file_manager.cache_path)
+        os.makedirs(self.file_manager.out_dir_with_video_name, exist_ok=True)
 
     def load_and_prepare_frame(self, frame_id):
-        frame_file = os.path.join(self.images_dir, f"{frame_id:05d}.jpg")
+        frame_file = os.path.join(self.file_manager.images_dir, f"{frame_id:05d}.jpg")
         logger.trace(f"Processing frame {frame_id} from {frame_file}")
 
         if not os.path.exists(frame_file):
@@ -236,11 +246,15 @@ class VideoProcessor:
     def process_frame(self, frame, frame_id, tracklets):
         front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[1], tracklets[3])
         self.visualizer.annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[1], (0, 255, 0))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[3], (0, 255, 0))
         self.front_distances.append(front_distance)
         self.front_distances_frame_ids.append(frame_id)
 
         back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[0], tracklets[2])
         self.visualizer.annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[0], (0, 255, 0))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[2], (0, 255, 0))
         self.back_distances.append(back_distance)
         self.back_distances_frame_ids.append(frame_id)
 
@@ -253,8 +267,8 @@ class VideoProcessor:
 
     def finalize_processing(self):
         self.visualizer.release()
-        ResultSaver.save_results(self.result_filepath, self.front_distances_frame_ids, self.front_distances, self.back_distances)
-        Visualizer.plot_results(self.front_distances_frame_ids, self.front_distances, self.back_distances, self.output_plot_path)
+        ResultSaver.save_results(self.file_manager.result_filepath, self.front_distances_frame_ids, self.front_distances, self.back_distances)
+        Visualizer.plot_results(self.front_distances_frame_ids, self.front_distances, self.back_distances, self.file_manager.output_plot_path)
 
     @staticmethod
     def compute_distance(marker_upper, marker_lower):

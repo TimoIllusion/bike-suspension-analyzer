@@ -10,7 +10,7 @@ Analyze suspension of a (moto)bikes.
 
 ## Requirements
 
-``Python3`` (>=3.7) with pip, and ``ffmpeg`` must be installed on system.
+``Python`` (>=3.7) with pip, and ``ffmpeg`` must be installed on system.
 
 Check version of python using `python --version`.
 
