@@ -11,8 +11,8 @@ Analyze suspension of a (moto)bikes.
 ## Setup
 
 ```bash
-python3 -m venv .env
-source ./.env/bin/activate
+python3 -m venv .venv
+source ./.venv/bin/activate
 
 python3 extract.py path/to/video.mp4
 python3 run.py path/to/video --start 10 --end 200
