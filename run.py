@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from loguru import logger
 
 # Constants
-CACHE_PATH = ".cache/cache.json"
+CACHE_FILENAME = "roi_cache.json"
 OUTPUT_DIR = "./output"
 RESULT_FILENAME = "results.json"
 OUTPUT_VIDEO_FILENAME = "out.mp4"
@@ -20,56 +20,69 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Analyze motobike suspension')
     parser.add_argument('video_images_path', type=str, help='Path to video images after extraction')
     parser.add_argument('--start', type=int, default=1, help='Start frame number (has to start with 1) (default: 1)')
-    parser.add_argument('--end', type=int, default=1000, help='End frame number (default: 1000)')
+    parser.add_argument('--end', type=int, default=None, help='End frame number (default: None)')
     args = parser.parse_args()
-    
+
     assert args.start > 0, "Start frame has to be greater than 0 due to ffmpeg generated frames starting with 00001"
+    
+    if args.end is None:
+        args.end = get_image_count(args.video_images_path)
+        logger.info(f"End frame not specified. Setting to {args.end}")
+    
     return args
 
-# Cache Functions
-def cached_roi_location_available() -> bool:
-    return os.path.exists(CACHE_PATH)
+# Utility Functions
+def get_image_count(path):
+    return len([f for f in os.listdir(path) if f.endswith('.jpg') and f != CACHE_FILENAME])
 
-def load_cached_roi_location():
-    with open(CACHE_PATH, "r") as f:
+def get_cache_path(video_images_path):
+    return os.path.join(video_images_path, CACHE_FILENAME)
+
+# Cache Functions
+def cached_roi_location_available(cache_path) -> bool:
+    return os.path.exists(cache_path)
+
+def load_cached_roi_location(cache_path):
+    with open(cache_path, "r") as f:
         bboxes = json.load(f)
     return bboxes["bbox_top_left"], bboxes["bbox_top_right"], bboxes["bbox_bottom_left"], bboxes["bbox_bottom_right"]
 
-def manually_set_roi_locations(frame):
+def manually_set_roi_locations(frame, cache_path):
     bbox_top_left = cv2.selectROI('bbox_top_left', frame, True)
-    bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
     bbox_bottom_left = cv2.selectROI('bbox_bottom_left', frame, True)
+    bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
     bbox_bottom_right = cv2.selectROI('bbox_bottom_right', frame, True)
 
     bboxes = {"bbox_top_left": bbox_top_left, "bbox_top_right": bbox_top_right, "bbox_bottom_left": bbox_bottom_left, "bbox_bottom_right": bbox_bottom_right}
 
-    cache_parent_dir = os.path.dirname(CACHE_PATH)
+    cache_parent_dir = os.path.dirname(cache_path)
     os.makedirs(cache_parent_dir, exist_ok=True)
 
-    with open(CACHE_PATH, "w") as f:
+    with open(cache_path, "w") as f:
         json.dump(bboxes, f, indent=4)
 
     return bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right
 
-def try_to_load_roi_cache_otherwise_set_manually(frame):
-    if cached_roi_location_available():
-        return load_cached_roi_location()
+def try_to_load_roi_cache_otherwise_set_manually(frame, cache_path):
+    if cached_roi_location_available(cache_path):
+        return load_cached_roi_location(cache_path)
     else:
-        return manually_set_roi_locations(frame)
+        return manually_set_roi_locations(frame, cache_path)
 
 # Tracklet Class
 class Tracklet:
     def __init__(self, bbox):
         x, y, w, h = [int(i) for i in bbox]
-        self.center = (int(x + w/2), int(y + h/2))
+        self.center = (int(x + w / 2), int(y + h / 2))
 
 def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
     return math.sqrt(math.pow((b.center[0] - a.center[0]), 2) + math.pow((b.center[1] - a.center[1]), 2))
 
 # Main Processing Function
 def process_video(args):
-    frame_counter = args.start
+    frame_id = args.start
     end_frame = args.end
+    cache_path = get_cache_path(args.video_images_path)
 
     result_filepath = os.path.join(OUTPUT_DIR, RESULT_FILENAME)
     output_video_path = os.path.join(OUTPUT_DIR, OUTPUT_VIDEO_FILENAME)
@@ -87,19 +100,20 @@ def process_video(args):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(output_video_path, fourcc, FPS, (1280, 720))
 
-    while True:
-        frame_file = os.path.join(args.video_images_path, f"{frame_counter:05d}.jpg")
-        logger.trace(f"Processing frame {frame_counter} from {frame_file}")
+    for frame_id in range(args.start, end_frame + 1):
+        
+        frame_file = os.path.join(args.video_images_path, f"{frame_id:05d}.jpg")
+        logger.debug(f"Processing frame {frame_id} from {frame_file}")
 
-        if not os.path.exists(frame_file) or frame_counter == end_frame:
-            logger.error(f"Frame {frame_file} not found. Break loop.")
-            break
+        if not os.path.exists(frame_file):
+            logger.error(f"Frame {frame_file} not found. Skipping frame.")
+            continue
         
         frame = cv2.imread(frame_file)
         frame = cv2.resize(frame, (1280, 720))
 
         if not initialized:
-            bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = try_to_load_roi_cache_otherwise_set_manually(frame)
+            bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = try_to_load_roi_cache_otherwise_set_manually(frame, cache_path)
 
             trackers = initialize_trackers(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
             initialized = True
@@ -111,20 +125,20 @@ def process_video(args):
         front_distance, marker_upper_front, marker_lower_front = compute_distance(tracklets[1], tracklets[3])
         annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
         front_distances.append(front_distance)
-        front_distances_frame_ids.append(frame_counter)
+        front_distances_frame_ids.append(frame_id)
 
         back_distance, marker_upper_back, marker_lower_back = compute_distance(tracklets[0], tracklets[2])
         annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
         back_distances.append(back_distance)
-        back_distances_frame_ids.append(frame_counter)
+        back_distances_frame_ids.append(frame_id)
 
-        cv2.putText(frame, f"Frame ID {frame_counter}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
 
         writer.write(frame)
         cv2.imshow("Preview", frame)
         cv2.waitKey(1)
         
-        frame_counter += 1
+        frame_id += 1
 
     writer.release()
     save_results(result_filepath, front_distances_frame_ids, front_distances, back_distances)
@@ -147,7 +161,7 @@ def update_trackers(trackers, frame):
         success, bbox = tracker.update(frame)
         if success:
             x, y, w, h = [int(i) for i in bbox]
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         tracklets.append(Tracklet(bbox))
         success_results.append(success)
     return tracklets, success_results
