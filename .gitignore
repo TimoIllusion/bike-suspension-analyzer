@@ -1,3 +1,18 @@
+# Custom
+
+videos
+output
+*.MOV
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.zip
+.env
+.cache
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

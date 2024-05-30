@@ -1,0 +1,8 @@
+opencv-python<=5
+opencv-contrib-python<=5
+imutils
+matplotlib
+numpy
+pandas
+openpyxl
+loguru
