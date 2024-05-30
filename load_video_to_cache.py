@@ -7,7 +7,8 @@ parser.add_argument('--output_dir', type=str, default="./.cache/", help='Output 
 args = parser.parse_args()
 
 video_name = os.path.basename(args.video_path)
-images_dir = os.path.join(args.output_dir, video_name)
+video_name_without_extension = os.path.splitext(video_name)[0]
+images_dir = os.path.join(args.output_dir, video_name_without_extension)
 os.makedirs(images_dir, exist_ok=True)
 
 cmd = f"ffmpeg -i {args.video_path} {images_dir}/%05d.jpg"
