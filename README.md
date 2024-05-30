@@ -19,8 +19,7 @@ python3 -m venv .venv
 source ./.venv/bin/activate
 pip install -r requirements.txt
 
-python3 extract.py path/to/video.mp4
-python3 run.py path/to/video --start 10 --end 200
+python3 run.py path/to/video
 ```
 
 
