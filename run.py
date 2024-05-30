@@ -2,11 +2,13 @@ import os
 import math
 import json
 import argparse
+
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from loguru import logger
 from tqdm import tqdm
+import pandas
 
 class Constants:
     CACHE_FILENAME = "_roi_cache.json"
@@ -175,8 +177,13 @@ class ResultSaver:
             "front": front_distances,
             "back": back_distances
         }
+        
         with open(filepath, "w") as f:
             json.dump(data, f, indent=4)
+        
+        df = pandas.read_json(filepath)
+        filepath_excel = filepath.replace(".json", ".xlsx")
+        df.to_excel(filepath_excel)
 
 class VideoProcessor:
     def __init__(self, args):
@@ -193,6 +200,8 @@ class VideoProcessor:
         self.extract_and_prepare_images()
         self.set_end_frame_if_none()
         self.initialize_processing_tools()
+        
+        logger.info("Processing started")
 
         for frame_id in tqdm(range(self.start_frame, self.end_frame + 1)):
             frame = self.load_and_prepare_frame(frame_id)
@@ -206,7 +215,8 @@ class VideoProcessor:
             self.process_frame(frame, frame_id, tracklets)
             if self.check_user_interrupt():
                 break
-
+            
+        logger.info("Processing finished")
         self.finalize_processing()
 
     def extract_and_prepare_images(self):
@@ -269,6 +279,7 @@ class VideoProcessor:
         self.visualizer.release()
         ResultSaver.save_results(self.file_manager.result_filepath, self.front_distances_frame_ids, self.front_distances, self.back_distances)
         Visualizer.plot_results(self.front_distances_frame_ids, self.front_distances, self.back_distances, self.file_manager.output_plot_path)
+        logger.info(f"Results saved to {self.file_manager.out_dir_with_video_name}")
 
     @staticmethod
     def compute_distance(marker_upper, marker_lower):
