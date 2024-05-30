@@ -17,7 +17,7 @@ FPS = 30
 
 # Argument Parser
 def parse_arguments():
-    parser = argparse.ArgumentParser(description='Analyze motobike suspension')
+    parser = argparse.ArgumentParser(description='Analyze motorcycle suspension')
     parser.add_argument('video_path', type=str, help='Path to the video file')
     parser.add_argument('--output_dir', type=str, default="./output/", help='Output directory to save results')
     parser.add_argument('--cache_dir', type=str, default="./.cache/", help='Cache directory to save images')
@@ -29,57 +29,176 @@ def parse_arguments():
 
     return args
 
-# Utility Functions
-def get_image_count(path):
-    return len([f for f in os.listdir(path) if f.endswith('.jpg') and f != CACHE_FILENAME])
+class VideoProcessor:
+    def __init__(self, args):
+        self.video_path = args.video_path
+        self.output_dir = args.output_dir
+        self.cache_dir = args.cache_dir
+        self.start_frame = args.start
+        self.end_frame = args.end
+        self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+        self.images_dir = os.path.join(self.cache_dir, self.video_name)
+        self.cache_path = self.get_cache_path()
+        self.out_dir_with_video_name = os.path.join(self.output_dir, self.video_name)
+        self.result_filepath = os.path.join(self.out_dir_with_video_name, RESULT_FILENAME)
+        self.output_video_path = os.path.join(self.out_dir_with_video_name, OUTPUT_VIDEO_FILENAME)
+        self.output_plot_path = os.path.join(self.out_dir_with_video_name, OUTPUT_PLOT_FILENAME)
+        self.front_distances = []
+        self.front_distances_frame_ids = []
+        self.back_distances = []
+        self.back_distances_frame_ids = []
+        self.initialized = False
+        os.makedirs(self.out_dir_with_video_name, exist_ok=True)
 
-def get_cache_path(video_images_path):
-    return os.path.join(video_images_path, CACHE_FILENAME)
+    def get_cache_path(self):
+        return os.path.join(self.images_dir, CACHE_FILENAME)
 
-def extract_images_if_not_existing_already(video_path, images_dir):
-    
-    if os.path.exists(images_dir):
-        logger.warning(f"Images directory {images_dir} already exists. Skipping extraction.")
-        return
-    
-    os.makedirs(images_dir, exist_ok=True)
-    cmd = f"ffmpeg -i {video_path} {images_dir}/%05d.jpg"
-    logger.info(f"Executing command: {cmd}")
-    os.system(cmd)
+    def extract_images_if_not_existing_already(self):
+        if os.path.exists(self.images_dir):
+            logger.warning(f"Images directory {self.images_dir} already exists. Skipping extraction.")
+            return
+        os.makedirs(self.images_dir, exist_ok=True)
+        cmd = f"ffmpeg -i {self.video_path} {self.images_dir}/%05d.jpg"
+        logger.info(f"Executing command: {cmd}")
+        os.system(cmd)
 
-# Cache Functions
-def cached_roi_location_available(cache_path) -> bool:
-    return os.path.exists(cache_path)
+    def get_image_count(self):
+        return len([f for f in os.listdir(self.images_dir) if f.endswith('.jpg') and f != CACHE_FILENAME])
 
-def load_cached_roi_location(cache_path):
-    logger.warning(f"Loading cached tracklet locations from {cache_path}")
-    with open(cache_path, "r") as f:
-        bboxes = json.load(f)
-    return bboxes["bbox_top_left"], bboxes["bbox_top_right"], bboxes["bbox_bottom_left"], bboxes["bbox_bottom_right"]
+    def cached_roi_location_available(self):
+        return os.path.exists(self.cache_path)
 
-def manually_set_roi_locations(frame, cache_path):
-    bbox_top_left = cv2.selectROI('bbox_top_left', frame, True)
-    bbox_bottom_left = cv2.selectROI('bbox_bottom_left', frame, True)
-    bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
-    bbox_bottom_right = cv2.selectROI('bbox_bottom_right', frame, True)
+    def load_cached_roi_location(self):
+        logger.warning(f"Loading cached tracklet locations from {self.cache_path}")
+        with open(self.cache_path, "r") as f:
+            bboxes = json.load(f)
+        return bboxes["bbox_top_left"], bboxes["bbox_top_right"], bboxes["bbox_bottom_left"], bboxes["bbox_bottom_right"]
 
-    bboxes = {"bbox_top_left": bbox_top_left, "bbox_top_right": bbox_top_right, "bbox_bottom_left": bbox_bottom_left, "bbox_bottom_right": bbox_bottom_right}
+    def manually_set_roi_locations(self, frame):
+        bbox_top_left = cv2.selectROI('bbox_top_left', frame, True)
+        bbox_bottom_left = cv2.selectROI('bbox_bottom_left', frame, True)
+        bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
+        bbox_bottom_right = cv2.selectROI('bbox_bottom_right', frame, True)
 
-    cache_parent_dir = os.path.dirname(cache_path)
-    os.makedirs(cache_parent_dir, exist_ok=True)
+        bboxes = {"bbox_top_left": bbox_top_left, "bbox_top_right": bbox_top_right, "bbox_bottom_left": bbox_bottom_left, "bbox_bottom_right": bbox_bottom_right}
 
-    with open(cache_path, "w") as f:
-        json.dump(bboxes, f, indent=4)
+        cache_parent_dir = os.path.dirname(self.cache_path)
+        os.makedirs(cache_parent_dir, exist_ok=True)
 
-    return bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right
+        with open(self.cache_path, "w") as f:
+            json.dump(bboxes, f, indent=4)
 
-def try_to_load_roi_cache_otherwise_set_manually(frame, cache_path):
-    if cached_roi_location_available(cache_path):
-        return load_cached_roi_location(cache_path)
-    else:
-        return manually_set_roi_locations(frame, cache_path)
+        return bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right
 
-# Tracklet Class
+    def try_to_load_roi_cache_otherwise_set_manually(self, frame):
+        if self.cached_roi_location_available():
+            return self.load_cached_roi_location()
+        else:
+            return self.manually_set_roi_locations(frame)
+
+    def initialize_trackers(self, frame, bboxes):
+        trackers = []
+        for bbox in bboxes:
+            tracker = cv2.TrackerCSRT_create()
+            tracker.init(frame, bbox)
+            trackers.append(tracker)
+        return trackers
+
+    def update_trackers(self, trackers, frame):
+        tracklets = []
+        success_results = []
+        for tracker in trackers:
+            success, bbox = tracker.update(frame)
+            if success:
+                x, y, w, h = [int(i) for i in bbox]
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            tracklets.append(Tracklet(bbox))
+            success_results.append(success)
+        return tracklets, success_results
+
+    def compute_distance(self, marker_upper, marker_lower):
+        distance = euclidean_distance(marker_upper, marker_lower)
+        return distance, marker_upper, marker_lower
+
+    def annotate_frame(self, frame, marker_upper, marker_lower, distance, color):
+        cv2.putText(frame, str(np.round(distance, 1)), (marker_upper.center[0] + 50, marker_upper.center[1] + 50), 0, 1.2, (0, 0, 0), 3)
+        cv2.line(frame, marker_upper.center, marker_lower.center, color, 6)
+
+    def save_results(self):
+        data = {
+            "frame_ids": self.front_distances_frame_ids,
+            "front": self.front_distances,
+            "back": self.back_distances
+        }
+        with open(self.result_filepath, "w") as f:
+            json.dump(data, f, indent=4)
+
+    def plot_results(self):
+        front_distances = np.array(self.front_distances) - self.front_distances[0]
+        back_distances = np.array(self.back_distances) - self.back_distances[0]
+
+        plt.figure(figsize=(16, 9))
+        plt.plot(self.front_distances_frame_ids, front_distances, color="blue")
+        plt.plot(self.front_distances_frame_ids, back_distances, color="red")
+        plt.title("Tracklet distance progression FRONT and BACK")
+        plt.xlabel("# Frame")
+        plt.ylabel("Euclidean distance relative to starting distance in px")
+        plt.legend(["front", "back"])
+        plt.savefig(self.output_plot_path)
+
+    def process_video(self):
+        self.extract_images_if_not_existing_already()
+        if self.end_frame is None:
+            self.end_frame = self.get_image_count()
+            logger.info(f"End frame not specified. Setting to {self.end_frame}")
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(self.output_video_path, fourcc, FPS, (1280, 720))
+
+        for frame_id in tqdm(range(self.start_frame, self.end_frame + 1)):
+            frame_file = os.path.join(self.images_dir, f"{frame_id:05d}.jpg")
+            logger.trace(f"Processing frame {frame_id} from {frame_file}")
+
+            if not os.path.exists(frame_file):
+                logger.error(f"Frame {frame_file} not found. Skipping frame.")
+                continue
+            
+            frame = cv2.imread(frame_file)
+            frame = cv2.resize(frame, (1280, 720))
+
+            if not self.initialized:
+                bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = self.try_to_load_roi_cache_otherwise_set_manually(frame)
+                self.trackers = self.initialize_trackers(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
+                self.initialized = True
+                cv2.destroyAllWindows()
+                cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
+
+            tracklets, success_results = self.update_trackers(self.trackers, frame)
+            
+            front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[1], tracklets[3])
+            self.annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
+            self.front_distances.append(front_distance)
+            self.front_distances_frame_ids.append(frame_id)
+
+            back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[0], tracklets[2])
+            self.annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
+            self.back_distances.append(back_distance)
+            self.back_distances_frame_ids.append(frame_id)
+
+            cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+
+            writer.write(frame)
+            cv2.imshow("Preview", frame)
+            
+            # break if q or ESC pressed
+            if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:
+                logger.warning("User interrupted processing. Exiting.")
+                break
+
+        writer.release()
+        self.save_results()
+        self.plot_results()
+
 class Tracklet:
     def __init__(self, bbox):
         x, y, w, h = [int(i) for i in bbox]
@@ -88,138 +207,7 @@ class Tracklet:
 def euclidean_distance(a: Tracklet, b: Tracklet) -> float:
     return math.sqrt(math.pow((b.center[0] - a.center[0]), 2) + math.pow((b.center[1] - a.center[1]), 2))
 
-# Main Processing Function
-def process_video(args):
-    video_name = os.path.splitext(os.path.basename(args.video_path))[0]
-    images_dir = os.path.join(args.cache_dir, video_name)
-    extract_images_if_not_existing_already(args.video_path, images_dir)
-
-    frame_id = args.start
-    end_frame = args.end
-    cache_path = get_cache_path(images_dir)
-
-    if end_frame is None:
-        end_frame = get_image_count(images_dir)
-        logger.info(f"End frame not specified. Setting to {end_frame}")
-
-    out_dir_with_video_name = os.path.join(args.output_dir, video_name)
-    os.makedirs(out_dir_with_video_name, exist_ok=True)
-    
-    result_filepath = os.path.join(out_dir_with_video_name, RESULT_FILENAME)
-    output_video_path = os.path.join(out_dir_with_video_name, OUTPUT_VIDEO_FILENAME)
-    output_plot_path = os.path.join(out_dir_with_video_name, OUTPUT_PLOT_FILENAME)
-
-    front_distances = []
-    front_distances_frame_ids = []
-    back_distances = []
-    back_distances_frame_ids = []
-
-    initialized = False
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_video_path, fourcc, FPS, (1280, 720))
-
-    for frame_id in tqdm(range(args.start, end_frame + 1)):
-        frame_file = os.path.join(images_dir, f"{frame_id:05d}.jpg")
-        logger.trace(f"Processing frame {frame_id} from {frame_file}")
-
-        if not os.path.exists(frame_file):
-            logger.error(f"Frame {frame_file} not found. Skipping frame.")
-            continue
-        
-        frame = cv2.imread(frame_file)
-        frame = cv2.resize(frame, (1280, 720))
-
-        if not initialized:
-            bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = try_to_load_roi_cache_otherwise_set_manually(frame, cache_path)
-
-            trackers = initialize_trackers(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
-            initialized = True
-            cv2.destroyAllWindows()
-            cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
-
-        tracklets, success_results = update_trackers(trackers, frame)
-        
-        front_distance, marker_upper_front, marker_lower_front = compute_distance(tracklets[1], tracklets[3])
-        annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
-        front_distances.append(front_distance)
-        front_distances_frame_ids.append(frame_id)
-
-        back_distance, marker_upper_back, marker_lower_back = compute_distance(tracklets[0], tracklets[2])
-        annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
-        back_distances.append(back_distance)
-        back_distances_frame_ids.append(frame_id)
-
-        cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-        writer.write(frame)
-        cv2.imshow("Preview", frame)
-        
-        # break if q or ESC pressed
-        if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:
-            logger.warning("User interrupted processing. Exiting.")
-            break
-
-    writer.release()
-    save_results(result_filepath, front_distances_frame_ids, front_distances, back_distances)
-    plot_results(front_distances_frame_ids, front_distances, back_distances, output_plot_path)
-
-# Initialize Trackers
-def initialize_trackers(frame, bboxes):
-    trackers = []
-    for bbox in bboxes:
-        tracker = cv2.TrackerCSRT_create()
-        tracker.init(frame, bbox)
-        trackers.append(tracker)
-    return trackers
-
-# Update Trackers
-def update_trackers(trackers, frame):
-    tracklets = []
-    success_results = []
-    for tracker in trackers:
-        success, bbox = tracker.update(frame)
-        if success:
-            x, y, w, h = [int(i) for i in bbox]
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        tracklets.append(Tracklet(bbox))
-        success_results.append(success)
-    return tracklets, success_results
-
-# Compute Distance
-def compute_distance(marker_upper, marker_lower):
-    distance = euclidean_distance(marker_upper, marker_lower)
-    return distance, marker_upper, marker_lower
-
-# Annotate Frame
-def annotate_frame(frame, marker_upper, marker_lower, distance, color):
-    cv2.putText(frame, str(np.round(distance, 1)), (marker_upper.center[0] + 50, marker_upper.center[1] + 50), 0, 1.2, (0, 0, 0), 3)
-    cv2.line(frame, marker_upper.center, marker_lower.center, color, 6)
-
-# Save Results
-def save_results(filepath, frame_ids, front_distances, back_distances):
-    data = {
-        "frame_ids": frame_ids,
-        "front": front_distances,
-        "back": back_distances
-    }
-    with open(filepath, "w") as f:
-        json.dump(data, f, indent=4)
-
-# Plot Results
-def plot_results(frame_ids, front_distances, back_distances, output_path):
-    front_distances = np.array(front_distances) - front_distances[0]
-    back_distances = np.array(back_distances) - back_distances[0]
-
-    plt.figure(figsize=(16, 9))
-    plt.plot(frame_ids, front_distances, color="blue")
-    plt.plot(frame_ids, back_distances, color="red")
-    plt.title("Tracklet distance progression FRONT and BACK")
-    plt.xlabel("# Frame")
-    plt.ylabel("Euclidean distance relative to starting distance in px")
-    plt.legend(["front", "back"])
-    plt.savefig(output_path)
-
 if __name__ == "__main__":
     args = parse_arguments()
-    process_video(args)
+    processor = VideoProcessor(args)
+    processor.process_video()
