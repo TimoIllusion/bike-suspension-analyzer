@@ -27,8 +27,7 @@ class FilePathManager:
         self.video_name = os.path.splitext(os.path.basename(self.video_source_path))[0]
         self.cache_dir = cache_dir
         
-        self.video_frames_cache_dir = os.path.join(self.cache_dir, self.video_name)
-        self.tracker_roi_cache_path = os.path.join(self.video_frames_cache_dir, Constants.TRACKER_ROI_CACHE_FILENAME)
+        self.tracker_roi_cache_path = os.path.join(self.cache_dir, self.video_name, Constants.TRACKER_ROI_CACHE_FILENAME)
         
         self.out_dir_video_results = os.path.join(output_dir, self.video_name)
         self.result_filepath = os.path.join(self.out_dir_video_results, Constants.OUTPUT_RESULT_DATA_JSON_FILE)
@@ -39,29 +38,6 @@ class FilePathManager:
     
     def create_directories(self):
         os.makedirs(self.out_dir_video_results, exist_ok=True)
-
-class VideoUtils:
-    @staticmethod
-    def extract_images_if_not_existing(video_path, images_dir):
-        if os.path.exists(images_dir):
-            logger.warning(f"Images directory {images_dir} already exists. Skipping extraction.")
-            return
-        else:
-            os.makedirs(images_dir, exist_ok=True)
-        
-        logger.info(f"Extracting frames from {video_path} to {images_dir}... May take a few minutes.")
-        with VideoFileClip(video_path) as video:
-            frame_count = int(video.fps * video.duration)
-            for i, frame in enumerate(video.iter_frames()):
-                frame_filename = os.path.join(images_dir, f"{i:05d}.jpg")
-                # Convert the frame to BGR (OpenCV format) and save it
-                cv2.imwrite(frame_filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        
-        logger.info(f"Extracted {frame_count} frames from {video_path}")
-
-    @staticmethod
-    def get_image_count(images_dir):
-        return len([f for f in os.listdir(images_dir) if f.endswith('.jpg') and f != Constants.TRACKER_ROI_CACHE_FILENAME])
 
 class Tracklet:
     def __init__(self, bbox):
@@ -195,8 +171,9 @@ class ResultSaver:
 class VideoProcessor:
     def __init__(self, video_path, output_dir, cache_dir, start, end):
         self.file_manager = FilePathManager(video_path, output_dir, cache_dir)
+        self.video = VideoFileClip(video_path)
         self.start_frame = start
-        self.end_frame = end
+        self.end_frame = end if end is not None else int(self.video.fps * self.video.duration) - 1
         self.front_distances = []
         self.front_distances_frame_ids = []
         self.back_distances = []
@@ -204,11 +181,6 @@ class VideoProcessor:
         self.initialized = False
 
     def process_video(self):
-        self.extract_and_prepare_images()
-        
-        if self.end_frame is None:
-            self.set_end_frame()
-        
         self.initialize_processing_tools()
         
         logger.info("Processing started")
@@ -229,26 +201,15 @@ class VideoProcessor:
         logger.info("Processing finished")
         self.finalize_processing()
 
-    def extract_and_prepare_images(self):
-        VideoUtils.extract_images_if_not_existing(self.file_manager.video_source_path, self.file_manager.video_frames_cache_dir)
-
-    def set_end_frame(self):
-        self.end_frame = VideoUtils.get_image_count(self.file_manager.video_frames_cache_dir)
-        logger.info(f"End frame not specified. Setting to {self.end_frame}")
-
     def initialize_processing_tools(self):
         self.visualizer = Visualizer(self.file_manager.output_video_path, Constants.OUTPUT_VIDEO_FPS, (1280, 720))
         self.roi_manager = ROIManager(self.file_manager.tracker_roi_cache_path)
 
     def load_and_prepare_frame(self, frame_id):
-        frame_file = os.path.join(self.file_manager.video_frames_cache_dir, f"{frame_id:05d}.jpg")
-        logger.trace(f"Processing frame {frame_id} from {frame_file}")
+        logger.trace(f"Processing frame {frame_id}")
 
-        if not os.path.exists(frame_file):
-            logger.error(f"Frame {frame_file} not found. Skipping frame.")
-            return None
-
-        frame = cv2.imread(frame_file)
+        frame = self.video.get_frame(frame_id / self.video.fps)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         return cv2.resize(frame, (1280, 720))
 
     def initialize_trackers(self, frame):
