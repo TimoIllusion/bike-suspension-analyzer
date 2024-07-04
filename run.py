@@ -263,7 +263,7 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Bike Suspension Analyzer")
-        self.geometry("600x600")
+        self.geometry("1000x700")
 
         self.video_path = ""
         self.output_dir = "./output/"
@@ -324,7 +324,7 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
             self.video_entry.delete(0, tk.END)
             self.video_entry.insert(0, self.video_path)
             self.video = VideoFileClip(self.video_path)
-            self.end_frame = int(self.video.fps * self.video.duration) - 1
+            self.end_frame = int(self.video.fps * self.video.duration) - 2 # workaround for the last frame not being displayed
             self.end_entry.delete(0, tk.END)
             self.end_entry.insert(0, self.end_frame)
             self.update_start_frame()
