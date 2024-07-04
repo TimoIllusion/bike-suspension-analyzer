@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from loguru import logger
 from tqdm import tqdm
 import pandas
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 class Constants:
     TRACKER_ROI_CACHE_FILENAME = "_roi_cache.json"
@@ -16,19 +19,6 @@ class Constants:
     OUTPUT_PLOT_FILENAME = "plot.png"
     OUTPUT_VIDEO_FILENAME = "out.mp4"
     OUTPUT_VIDEO_FPS = 30
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Analyze motorcycle suspension')
-    parser.add_argument('video_path', type=str, help='Path to the video file')
-    parser.add_argument('--output_dir', type=str, default="./output/", help='Output directory to save results')
-    parser.add_argument('--cache_dir', type=str, default="./.cache/", help='Cache directory to save images')
-    parser.add_argument('--start', type=int, default=1, help='Start frame number (has to start with 1) (default: 1)')
-    parser.add_argument('--end', type=int, default=None, help='End frame number (default: None)')
-    args = parser.parse_args()
-
-    assert args.start > 0, "Start frame has to be greater than 0 due to ffmpeg generated frames starting with 00001"
-
-    return args
 
 class FilePathManager:
     def __init__(self, video_path, output_dir, cache_dir):
@@ -49,6 +39,8 @@ class FilePathManager:
     def create_directories(self):
         os.makedirs(self.out_dir_video_results, exist_ok=True)
 
+
+
 class VideoUtils:
     @staticmethod
     def extract_images_if_not_existing(video_path, images_dir):
@@ -57,14 +49,21 @@ class VideoUtils:
             return
         else:
             os.makedirs(images_dir, exist_ok=True)
-            
-        cmd = f"ffmpeg -i {video_path} {images_dir}/%05d.jpg"
-        logger.info(f"Executing command: {cmd}")
-        os.system(cmd)
+        
+        logger.info(f"Extracting frames from {video_path} to {images_dir}... May take a few minutes.")
+        with VideoFileClip(video_path) as video:
+            frame_count = int(video.fps * video.duration)
+            for i, frame in enumerate(video.iter_frames()):
+                frame_filename = os.path.join(images_dir, f"{i:05d}.jpg")
+                # Convert the frame to BGR (OpenCV format) and save it
+                cv2.imwrite(frame_filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        
+        logger.info(f"Extracted {frame_count} frames from {video_path}")
 
     @staticmethod
     def get_image_count(images_dir):
         return len([f for f in os.listdir(images_dir) if f.endswith('.jpg') and f != Constants.TRACKER_ROI_CACHE_FILENAME])
+
 
 class Tracklet:
     def __init__(self, bbox):
@@ -172,6 +171,13 @@ class ROIManager:
         else:
             return self.manually_set_roi_locations(frame)
 
+    def reset_roi(self):
+        if self.cached_roi_location_available():
+            os.remove(self.roi_file_path)
+            logger.info(f"Deleted cached ROI file: {self.roi_file_path}")
+        else:
+            logger.warning("No cached ROI file found to delete.")
+
 class ResultSaver:
     @staticmethod
     def save_results(filepath, frame_ids, front_distances, back_distances):
@@ -189,10 +195,10 @@ class ResultSaver:
         df.to_excel(filepath_excel)
 
 class VideoProcessor:
-    def __init__(self, args):
-        self.file_manager = FilePathManager(args.video_path, args.output_dir, args.cache_dir)
-        self.start_frame = args.start
-        self.end_frame = args.end
+    def __init__(self, video_path, output_dir, cache_dir, start, end):
+        self.file_manager = FilePathManager(video_path, output_dir, cache_dir)
+        self.start_frame = start
+        self.end_frame = end
         self.front_distances = []
         self.front_distances_frame_ids = []
         self.back_distances = []
@@ -294,7 +300,90 @@ class VideoProcessor:
         distance = euclidean_distance(marker_upper, marker_lower)
         return distance, marker_upper, marker_lower
 
+class BikeSuspensionAnalyzerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Bike Suspension Analyzer")
+        self.geometry("500x330")
+
+        self.video_path = ""
+        self.output_dir = "./output/"
+        self.cache_dir = "./.cache/"
+        self.start_frame = 1
+        self.end_frame = None
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        tk.Label(self, text="Video Path").grid(row=0, column=0, padx=10, pady=10)
+        self.video_entry = tk.Entry(self, width=40)
+        self.video_entry.grid(row=0, column=1, padx=10, pady=10)
+        tk.Button(self, text="Browse", command=self.browse_video).grid(row=0, column=2, padx=10, pady=10)
+
+        tk.Label(self, text="Output Directory").grid(row=1, column=0, padx=10, pady=10)
+        self.output_entry = tk.Entry(self, width=40)
+        self.output_entry.insert(0, self.output_dir)
+        self.output_entry.grid(row=1, column=1, padx=10, pady=10)
+
+        tk.Label(self, text="Cache Directory").grid(row=2, column=0, padx=10, pady=10)
+        self.cache_entry = tk.Entry(self, width=40)
+        self.cache_entry.insert(0, self.cache_dir)
+        self.cache_entry.grid(row=2, column=1, padx=10, pady=10)
+
+        tk.Label(self, text="Start Frame").grid(row=3, column=0, padx=10, pady=10)
+        self.start_entry = tk.Entry(self, width=40)
+        self.start_entry.insert(0, self.start_frame)
+        self.start_entry.grid(row=3, column=1, padx=10, pady=10)
+
+        tk.Label(self, text="End Frame").grid(row=4, column=0, padx=10, pady=10)
+        self.end_entry = tk.Entry(self, width=40)
+        self.end_entry.grid(row=4, column=1, padx=10, pady=10)
+
+        tk.Button(self, text="Start Analysis", command=self.start_analysis).grid(row=5, column=0, columnspan=3, pady=10)
+        tk.Button(self, text="Reset ROI", command=self.reset_roi).grid(row=6, column=0, columnspan=3, pady=10)
+
+    def browse_video(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi *.mov")])
+        if file_path:
+            self.video_path = file_path
+            self.video_entry.delete(0, tk.END)
+            self.video_entry.insert(0, self.video_path)
+
+    def start_analysis(self):
+        self.video_path = self.video_entry.get()
+        self.output_dir = self.output_entry.get()
+        self.cache_dir = self.cache_entry.get()
+        self.start_frame = int(self.start_entry.get())
+        self.end_frame = int(self.end_entry.get()) if self.end_entry.get() else None
+
+        if not self.video_path:
+            messagebox.showerror("Error", "Please select a video file.")
+            return
+
+        args = argparse.Namespace(
+            video_path=self.video_path,
+            output_dir=self.output_dir,
+            cache_dir=self.cache_dir,
+            start=self.start_frame,
+            end=self.end_frame
+        )
+
+        processor = VideoProcessor(args.video_path, args.output_dir, args.cache_dir, args.start, args.end)
+        processor.process_video()
+
+    def reset_roi(self):
+        if not self.video_path:
+            messagebox.showerror("Error", "Please select a video file first.")
+            return
+        
+        cache_dir = self.cache_entry.get()
+        video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+        roi_file_path = os.path.join(cache_dir, video_name, Constants.TRACKER_ROI_CACHE_FILENAME)
+        
+        roi_manager = ROIManager(roi_file_path)
+        roi_manager.reset_roi()
+        messagebox.showinfo("Reset ROI", "The ROI cache has been reset. You will be prompted to set the ROI again during the next analysis.")
+
 if __name__ == "__main__":
-    args = parse_arguments()
-    processor = VideoProcessor(args)
-    processor.process_video()
+    app = BikeSuspensionAnalyzerApp()
+    app.mainloop()
