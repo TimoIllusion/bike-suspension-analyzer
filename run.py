@@ -12,6 +12,7 @@ import pandas
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from moviepy.video.io.VideoFileClip import VideoFileClip
+from PIL import Image, ImageTk
 
 class Constants:
     TRACKER_ROI_CACHE_FILENAME = "_roi_cache.json"
@@ -39,8 +40,6 @@ class FilePathManager:
     def create_directories(self):
         os.makedirs(self.out_dir_video_results, exist_ok=True)
 
-
-
 class VideoUtils:
     @staticmethod
     def extract_images_if_not_existing(video_path, images_dir):
@@ -63,7 +62,6 @@ class VideoUtils:
     @staticmethod
     def get_image_count(images_dir):
         return len([f for f in os.listdir(images_dir) if f.endswith('.jpg') and f != Constants.TRACKER_ROI_CACHE_FILENAME])
-
 
 class Tracklet:
     def __init__(self, bbox):
@@ -304,13 +302,15 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Bike Suspension Analyzer")
-        self.geometry("500x330")
+        self.geometry("600x600")
 
         self.video_path = ""
         self.output_dir = "./output/"
         self.cache_dir = "./.cache/"
         self.start_frame = 1
         self.end_frame = None
+
+        self.video = None  # VideoFileClip object
 
         self.create_widgets()
 
@@ -334,13 +334,27 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
         self.start_entry = tk.Entry(self, width=40)
         self.start_entry.insert(0, self.start_frame)
         self.start_entry.grid(row=3, column=1, padx=10, pady=10)
+        self.start_entry.bind('<Return>', self.update_start_frame)
 
         tk.Label(self, text="End Frame").grid(row=4, column=0, padx=10, pady=10)
         self.end_entry = tk.Entry(self, width=40)
         self.end_entry.grid(row=4, column=1, padx=10, pady=10)
+        self.end_entry.bind('<Return>', self.update_end_frame)
 
         tk.Button(self, text="Start Analysis", command=self.start_analysis).grid(row=5, column=0, columnspan=3, pady=10)
         tk.Button(self, text="Reset ROI", command=self.reset_roi).grid(row=6, column=0, columnspan=3, pady=10)
+
+        self.frame_label = tk.Label(self)
+        self.frame_label.grid(row=7, column=0, columnspan=3, pady=10)
+
+        self.start_frame_label = tk.Label(self)
+        self.start_frame_label.grid(row=8, column=0, padx=10, pady=10)
+
+        self.end_frame_label = tk.Label(self)
+        self.end_frame_label.grid(row=8, column=1, padx=10, pady=10)
+        # add text above the image
+        tk.Label(self, text="Start Frame").grid(row=9, column=0, padx=10, pady=10)
+        tk.Label(self, text="End Frame").grid(row=9, column=1, padx=10, pady=10)
 
     def browse_video(self):
         file_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi *.mov")])
@@ -348,6 +362,12 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
             self.video_path = file_path
             self.video_entry.delete(0, tk.END)
             self.video_entry.insert(0, self.video_path)
+            self.video = VideoFileClip(self.video_path)
+            self.end_frame = int(self.video.fps * self.video.duration) - 1
+            self.end_entry.delete(0, tk.END)
+            self.end_entry.insert(0, self.end_frame)
+            self.update_start_frame()
+            self.update_end_frame()
 
     def start_analysis(self):
         self.video_path = self.video_entry.get()
@@ -383,6 +403,29 @@ class BikeSuspensionAnalyzerApp(tk.Tk):
         roi_manager = ROIManager(roi_file_path)
         roi_manager.reset_roi()
         messagebox.showinfo("Reset ROI", "The ROI cache has been reset. You will be prompted to set the ROI again during the next analysis.")
+
+    def display_frame(self, frame_number, label, scale=200):
+        if self.video:
+            frame = self.video.get_frame(frame_number / self.video.fps)
+            frame = cv2.resize(frame, (scale, scale))
+            img = Image.fromarray(frame)
+            imgtk = ImageTk.PhotoImage(image=img)
+            label.imgtk = imgtk
+            label.config(image=imgtk)
+
+    def update_start_frame(self, event=None):
+        try:
+            frame_number = int(self.start_entry.get())
+            self.display_frame(frame_number, self.start_frame_label, 200)
+        except ValueError:
+            pass
+
+    def update_end_frame(self, event=None):
+        try:
+            frame_number = int(self.end_entry.get())
+            self.display_frame(frame_number, self.end_frame_label, 200)
+        except ValueError:
+            pass
 
 if __name__ == "__main__":
     app = BikeSuspensionAnalyzerApp()
