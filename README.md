@@ -26,5 +26,10 @@ pip install -r requirements.txt
 python run.py
 ```
 
+## TODO
+
+- [ ] Make application portable/installable
+- [ ] Increase user friendlyness: ROI selection with more hints, Output/Input dir automatically set to user and with directory dialogue
+
 
 
