@@ -116,28 +116,28 @@ class ROIManager:
         logger.warning(f"Loading cached tracklet locations from {self.roi_file_path}")
         with open(self.roi_file_path, "r") as f:
             bboxes = json.load(f)
-        return bboxes["bbox_top_left"], bboxes["bbox_top_right"], bboxes["bbox_bottom_left"], bboxes["bbox_bottom_right"]
+        return bboxes["bbox_top_front"], bboxes["bbox_bottom_front"], bboxes["bbox_top_back"], bboxes["bbox_bottom_back"]
 
     def manually_set_roi_locations(self, frame):
-        bbox_top_left = cv2.selectROI('bbox_top_left', frame, True)
-        bbox_bottom_left = cv2.selectROI('bbox_bottom_left', frame, True)
-        bbox_top_right = cv2.selectROI('bbox_top_right', frame, True)
-        bbox_bottom_right = cv2.selectROI('bbox_bottom_right', frame, True)
+        bbox_top_front = cv2.selectROI('top front marker', frame, True)
+        bbox_bottom_front = cv2.selectROI('bottom front marker', frame, True)
+        bbox_top_back = cv2.selectROI('top back marker', frame, True)
+        bbox_bottom_back = cv2.selectROI('bottom back marker', frame, True)
 
         bboxes = {
-            "bbox_top_left": bbox_top_left, 
-            "bbox_top_right": bbox_top_right, 
-            "bbox_bottom_left": bbox_bottom_left, 
-            "bbox_bottom_right": bbox_bottom_right
+            "bbox_top_front": bbox_top_front,
+            "bbox_bottom_front": bbox_bottom_front,
+            "bbox_top_back": bbox_top_back,
+            "bbox_bottom_back": bbox_bottom_back
         }
-        
+
         roi_file_dir = os.path.dirname(self.roi_file_path)
         os.makedirs(roi_file_dir, exist_ok=True)
 
         with open(self.roi_file_path, "w") as f:
             json.dump(bboxes, f, indent=4)
 
-        return bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right
+        return bbox_top_front, bbox_bottom_front, bbox_top_back, bbox_bottom_back
 
     def try_to_load_roi_cache_or_set_manually(self, frame):
         if self.cached_roi_location_available():
@@ -213,8 +213,8 @@ class VideoProcessor:
         return cv2.resize(frame, (1280, 720))
 
     def initialize_trackers(self, frame):
-        bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right = self.roi_manager.try_to_load_roi_cache_or_set_manually(frame)
-        self.tracker = TrackerManager(frame, [bbox_top_left, bbox_top_right, bbox_bottom_left, bbox_bottom_right])
+        bbox_top_front, bbox_bottom_front, bbox_top_back, bbox_bottom_back = self.roi_manager.try_to_load_roi_cache_or_set_manually(frame)
+        self.tracker = TrackerManager(frame, [bbox_top_front, bbox_bottom_front, bbox_top_back, bbox_bottom_back])
         self.initialized = True
         cv2.destroyAllWindows()
         cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
@@ -223,20 +223,20 @@ class VideoProcessor:
         return self.tracker.update_trackers(frame)
 
     def process_frame(self, frame, frame_id, tracklets):
-        front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[1], tracklets[3])
-        
+        front_distance, marker_upper_front, marker_lower_front = self.compute_distance(tracklets[0], tracklets[1])
+
         self.visualizer.annotate_frame(frame, marker_upper_front, marker_lower_front, front_distance, (255, 0, 0))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[0], (0, 255, 0))
         self.visualizer.draw_marker_as_rectangle(frame, tracklets[1], (0, 255, 0))
-        self.visualizer.draw_marker_as_rectangle(frame, tracklets[3], (0, 255, 0))
-        
+
         self.front_distances.append(front_distance)
         self.front_distances_frame_ids.append(frame_id)
 
-        back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[0], tracklets[2])
-        
+        back_distance, marker_upper_back, marker_lower_back = self.compute_distance(tracklets[2], tracklets[3])
+
         self.visualizer.annotate_frame(frame, marker_upper_back, marker_lower_back, back_distance, (0, 0, 255))
-        self.visualizer.draw_marker_as_rectangle(frame, tracklets[0], (0, 255, 0))
         self.visualizer.draw_marker_as_rectangle(frame, tracklets[2], (0, 255, 0))
+        self.visualizer.draw_marker_as_rectangle(frame, tracklets[3], (0, 255, 0))
         
         self.back_distances.append(back_distance)
         self.back_distances_frame_ids.append(frame_id)
