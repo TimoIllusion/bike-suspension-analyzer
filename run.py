@@ -74,6 +74,8 @@ class TrackerManager:
         return tracklets, success_results
 
 class Visualizer:
+    PLOT_RECT = (400, 420, 480, 250)
+
     def __init__(self, output_video_path, fps, frame_size):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         self.writer = cv2.VideoWriter(output_video_path, fourcc, fps, frame_size)
@@ -90,6 +92,133 @@ class Visualizer:
 
     def release(self):
         self.writer.release()
+
+    def draw_distance_progress(self, frame, frame_ids, front_distances, back_distances, start_frame, end_frame):
+        if not frame_ids:
+            return
+
+        start_frame = start_frame if start_frame is not None else frame_ids[0]
+        end_frame = end_frame if end_frame is not None else frame_ids[-1]
+
+        x, y, width, height = self.PLOT_RECT
+        padding_left = 55
+        padding_right = 20
+        padding_top = 32
+        padding_bottom = 42
+        plot_x = x + padding_left
+        plot_y = y + padding_top
+        plot_width = width - padding_left - padding_right
+        plot_height = height - padding_top - padding_bottom
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x, y), (x + width, y + height), (245, 245, 245), -1)
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        cv2.rectangle(frame, (x, y), (x + width, y + height), (40, 40, 40), 1)
+
+        front_relative = np.array(front_distances) - front_distances[0]
+        back_relative = np.array(back_distances) - back_distances[0]
+        y_values = np.concatenate([front_relative, back_relative, np.array([0])])
+        y_min = float(np.min(y_values))
+        y_max = float(np.max(y_values))
+        y_span = y_max - y_min
+        if y_span < 1:
+            y_min -= 1
+            y_max += 1
+        else:
+            y_padding = y_span * 0.15
+            y_min -= y_padding
+            y_max += y_padding
+
+        def map_x(frame_id):
+            frame_span = max(end_frame - start_frame, 1)
+            progress = (frame_id - start_frame) / frame_span
+            progress = min(max(progress, 0), 1)
+            return int(plot_x + progress * plot_width)
+
+        def map_y(value):
+            value_span = max(y_max - y_min, 1)
+            progress = (value - y_min) / value_span
+            return int(plot_y + plot_height - progress * plot_height)
+
+        def draw_polyline(values, color):
+            points = [
+                (map_x(frame_id), map_y(value))
+                for frame_id, value in zip(frame_ids, values)
+            ]
+            if len(points) == 1:
+                cv2.circle(frame, points[0], 3, color, -1)
+            else:
+                cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, color, 2, cv2.LINE_AA)
+
+        cv2.line(frame, (plot_x, plot_y), (plot_x, plot_y + plot_height), (80, 80, 80), 1)
+        cv2.line(
+            frame,
+            (plot_x, plot_y + plot_height),
+            (plot_x + plot_width, plot_y + plot_height),
+            (80, 80, 80),
+            1
+        )
+
+        zero_y = map_y(0)
+        if plot_y <= zero_y <= plot_y + plot_height:
+            cv2.line(frame, (plot_x, zero_y), (plot_x + plot_width, zero_y), (180, 180, 180), 1, cv2.LINE_AA)
+
+        draw_polyline(front_relative, (255, 0, 0))
+        draw_polyline(back_relative, (0, 0, 255))
+
+        current_x = map_x(frame_ids[-1])
+        cv2.line(frame, (current_x, plot_y), (current_x, plot_y + plot_height), (70, 70, 70), 1, cv2.LINE_AA)
+
+        cv2.putText(
+            frame,
+            "Distance progress",
+            (x + 16, y + 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame,
+            "front",
+            (plot_x + 8, y + height - 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 0, 0),
+            1,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame,
+            "back",
+            (plot_x + 72, y + height - 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 0, 255),
+            1,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame,
+            f"{y_max:.0f}",
+            (x + 10, plot_y + 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (40, 40, 40),
+            1,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame,
+            f"{y_min:.0f}",
+            (x + 10, plot_y + plot_height),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (40, 40, 40),
+            1,
+            cv2.LINE_AA
+        )
 
     @staticmethod
     def plot_results(frame_ids, front_distances, back_distances, output_plot_path):
@@ -242,6 +371,14 @@ class VideoProcessor:
         self.back_distances_frame_ids.append(frame_id)
 
         cv2.putText(frame, f"Frame ID {frame_id}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        self.visualizer.draw_distance_progress(
+            frame,
+            self.front_distances_frame_ids,
+            self.front_distances,
+            self.back_distances,
+            self.start_frame,
+            self.end_frame
+        )
         self.visualizer.write_frame(frame)
         cv2.imshow("Preview", frame)
 
